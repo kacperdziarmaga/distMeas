@@ -32,9 +32,8 @@ public:
     void RenderDebugPip(cv::Mat& target, const cv::Mat& edge_mask) const;
 
 private:
-    // Constants for consistent styling (Yellow for Coin, Green for Phone)
-    const cv::Scalar _colorCoin = cv::Scalar(0, 255, 255);
-    const cv::Scalar _colorPhone = cv::Scalar(0, 255, 0);
-    const cv::Scalar _colorText = cv::Scalar(0, 255, 255);
-    const cv::Scalar _colorDebug = cv::Scalar(0, 0, 255);
+    const cv::Scalar _colorCoin = cv::Scalar(0, 255, 255),
+    _colorPhone = cv::Scalar(0, 255, 0),
+    _colorText = cv::Scalar(0, 255, 255),
+    _colorDebug = cv::Scalar(0, 0, 255);
 };
