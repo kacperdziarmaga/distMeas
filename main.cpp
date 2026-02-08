@@ -7,7 +7,7 @@
 #include <format>
 #include <numeric>
 
-constexpr double COIN_REAL_DIAMETER_MM = 24.0, MIN_COIN_AREA = 500.0, MIN_PHONE_AREA = 50000.0; 
+constexpr double COIN_REAL_DIAMETER_MM = 24.0, FOCAL_LENGTH_PX = 800.0, MIN_COIN_AREA = 500.0, MIN_PHONE_AREA = 50000.0; 
 
 double angle_cosine(cv::Point pt1, cv::Point pt0, cv::Point pt2) {
     cv::Point v1 = pt1 - pt0, v2 = pt2 - pt0;
@@ -48,8 +48,66 @@ int main() {
             size_t vertices = approx.size();
             bool is_convex = cv::isContourConvex(approx);
 
+            
+            //Coin Detection
+            if (vertices > 6 && is_convex) {
+                // 1. Initial fit to establish orientation and center
+                cv::RotatedRect fit = cv::fitEllipse(contour);
+
+                // 2. Requirement: "Only the coin's upper edge should be considered"
+                // Filter points: Keep only those physically "above" the center (y < center.y)
+                std::vector<cv::Point> upper_edge_pts;
+                upper_edge_pts.reserve(contour.size());
+                std::copy_if(contour.begin(), contour.end(), std::back_inserter(upper_edge_pts),
+                             [&](const cv::Point& p) { return p.y < fit.center.y; });
+
+                // Refine fit if we have enough points on the upper arc
+                if (upper_edge_pts.size() >= 6) {
+                    fit = cv::fitEllipse(upper_edge_pts);
+                }
+
+                // 3. Handle Angles/Distance:
+                // Use Major Axis (invariant diameter) and Axis Ratio (perspective tilt)
+                double major = std::max(fit.size.width, fit.size.height);
+                double minor = std::min(fit.size.width, fit.size.height);
+                double axis_ratio = (major > 0) ? minor / major : 0.0;
+
+                // Calculate fitted area (more robust than contourArea for tilted circles)
+                double fit_area = (CV_PI * major * minor) / 4.0;
+                cv::Mat H;
+                // Allow perspective tilt (ratio > 0.2 avoids lines/noise)
+                if (axis_ratio > 0.2 && fit_area > max_coin_area && fit_area < 50000) {
+                    max_coin_area = fit_area;
+                    best_coin_rect = fit;
+                    coin_found = true;
+
+                    // 4. Requirement: Calculate Homography
+                    // Map the detected ellipse corners to a perfect square (representing the circle from above)
+                    // This matrix H can be used to rectify other points (like the phone)
+                    std::vector<cv::Point2f> src_pts(4);
+                    fit.points(src_pts.data());
+
+                    // Sort corners for consistent mapping (TL, TR, BR, BL)
+                    // (Simple y-sort for top/bottom, then x-sort)
+                    std::sort(src_pts.begin(), src_pts.end(), [](const cv::Point2f& a, const cv::Point2f& b) {
+                        return a.y < b.y; 
+                    });
+                    if (src_pts[0].x > src_pts[1].x) std::swap(src_pts[0], src_pts[1]);
+                    if (src_pts[2].x > src_pts[3].x) std::swap(src_pts[2], src_pts[3]);
+
+                    // Destination: Square of size 'major' (the real diameter in pixels)
+                    float s = static_cast<float>(major);
+                    std::vector<cv::Point2f> dst_pts = {
+                        {0, 0}, {s, 0}, {s, s}, {0, s}
+                    };
+
+                    H = cv::findHomography(src_pts, dst_pts);
+                    // H is now calculated. To use it for the phone, you would apply:
+                    // cv::perspectiveTransform(phone_contour, rectified_phone, H);
+                }
+            }
             // Phone Detection
-            if (vertices == 4 && is_convex && area > MIN_PHONE_AREA) {
+            else if (vertices == 4 && is_convex && area > MIN_PHONE_AREA) {
                 
                 double max_cos = 0;
                 for (size_t j = 0; j < 4; j++) {
@@ -65,19 +123,9 @@ int main() {
                     }
                 }
             }
-            //Coin Detection
-            else if (vertices > 10 && is_convex) {
-                double circularity = (4 * CV_PI * area) / (perimeter * perimeter);
-                
-                if (circularity > 0.8 && circularity < 1.2) {
-                    if (area > max_coin_area && area < 50000) {
-                        max_coin_area = area;
-                        best_coin_rect = cv::fitEllipse(contour);
-                        coin_found = true;
-                    }
-                }
-            }
         }
+
+
         // Visualization & Measurement
         double px_per_mm = 0.0;
 
