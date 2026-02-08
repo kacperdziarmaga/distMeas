@@ -1,5 +1,5 @@
-#include "PhoneDetector.h"
-#include "AppConfig.h"
+#include "PhoneDetector.hpp"
+#include "AppConfig.hpp"
 #include <opencv2/imgproc.hpp>
 #include <cmath>
 #include <algorithm>

@@ -4,11 +4,11 @@
 #include <cmath>
 #include <algorithm>
 
-#include "AppConfig.h"
-#include "ImagePipeline.h"
-#include "CoinDetector.h"
-#include "PhoneDetector.h"
-#include "SceneRenderer.h"
+#include "AppConfig.hpp"
+#include "ImagePipeline.hpp"
+#include "CoinDetector.hpp"
+#include "PhoneDetector.hpp"
+#include "SceneRenderer.hpp"
 
 int main() {
     cv::VideoCapture cap(0, cv::CAP_ANY);

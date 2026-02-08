@@ -1,4 +1,4 @@
-#include "ImagePipeline.h"
+#include "ImagePipeline.hpp"
 #include <opencv2/imgproc.hpp>
 
 ImagePipeline::ImagePipeline() {
