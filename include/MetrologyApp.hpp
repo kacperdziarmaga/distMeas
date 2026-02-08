@@ -38,8 +38,9 @@ private:
     PhoneDetector phone_detector;
     SceneRenderer renderer;
 
-    void CalculateAndRender(cv::Mat& frame, const CoinResult& coin_res, const PhoneResult& phone_res);
+    double px_per_mm;
 
+    void CalculateAndRender(cv::Mat& frame, const CoinResult& coin_res, const PhoneResult& phone_res);
     void ProcessSingleFrame(cv::Mat& frame);
 };
 
