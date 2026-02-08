@@ -2,157 +2,141 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
-#include <print> // C++23. Use <iostream> if on older compilers.
+#include <iostream>
+#include <format>
+#include <numeric>
 
-// --- CONFIGURATION ---
-constexpr double REAL_DIAMETER_MM = 24.0; 
-constexpr double FOCAL_LENGTH_PX = 800.0; 
-constexpr double MIN_AREA = 1000.0;      // Noise filter
-constexpr double MAX_ECCENTRICITY = 0.95; // Reject lines/extreme angles
+constexpr double COIN_REAL_DIAMETER_MM = 24.0, MIN_COIN_AREA = 200.0, MIN_PHONE_AREA = 1500.0; 
 
-// Helper to order points for perspective transform
-// Orders: Top-Left, Top-Right, Bottom-Right, Bottom-Left
-std::vector<cv::Point2f> order_points(const std::vector<cv::Point2f>& pts) {
-    std::vector<cv::Point2f> ordered(4);
-    std::vector<float> sum(4), diff(4);
-
-    for (size_t i = 0; i < 4; ++i) {
-        sum[i] = pts[i].x + pts[i].y;
-        diff[i] = pts[i].y - pts[i].x;
-    }
-
-    ordered[0] = pts[std::min_element(sum.begin(), sum.end()) - sum.begin()];      // TL
-    ordered[2] = pts[std::max_element(sum.begin(), sum.end()) - sum.begin()];      // BR
-    ordered[1] = pts[std::min_element(diff.begin(), diff.end()) - diff.begin()];   // TR
-    ordered[3] = pts[std::max_element(diff.begin(), diff.end()) - diff.begin()];   // BL
-    return ordered;
+double angle_cosine(cv::Point pt1, cv::Point pt0, cv::Point pt2) {
+    cv::Point2d v1 = cv::Point2d(pt1) - cv::Point2d(pt0);
+    cv::Point2d v2 = cv::Point2d(pt2) - cv::Point2d(pt0);
+    return v1.dot(v2) / sqrt(v1.dot(v1) * v2.dot(v2) + 1e-10);
 }
 
 int main() {
-    // Optimization flags
-    cv::setUseOptimized(true);
-    cv::setNumThreads(cv::getNumberOfCPUs());
-
     cv::VideoCapture cap(0, cv::CAP_ANY);
     if (!cap.isOpened()) {
-        std::println(stderr, "Error: Could not open camera.");
+        std::cerr << "Error: Camera not found.\n";
         return 1;
     }
-
-    // High resolution helps with edge fitting accuracy
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, 1920);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 1080);
-    cap.set(cv::CAP_PROP_FPS, 60);
-
-    cv::Mat frame, gray, blurred, edges, rectified_view;
-    cv::TickMeter tm;
-
-    std::println("Press 'ESC' to exit.");
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, 1920); cap.set(cv::CAP_PROP_FRAME_HEIGHT, 1080);
+    cv::Mat frame, gray, blurred, edges, kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
 
     while (true) {
-        tm.start();
         if (!cap.read(frame)) break;
-
-        // 1. Preprocessing for Contour Detection
+        
         cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-        // Bilateral filter preserves edges better than Gaussian for shape fitting
-        cv::bilateralFilter(gray, blurred, 9, 75, 75);
-        
-        // Canny Edge Detection (Adaptive thresholds or tuned constants)
-        // Using Otsu's threshold high value for Canny is a common heuristic
-        double high_thresh = cv::threshold(blurred, edges, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-        cv::Canny(blurred, edges, 0.5 * high_thresh, high_thresh);
-        
-        // Close gaps in edges
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-        cv::morphologyEx(edges, edges, cv::MORPH_CLOSE, kernel);
+        cv::GaussianBlur(gray, blurred, cv::Size(0, 0), 4);
+        cv::Canny(blurred, edges, 5, 30, 3, true);
+        cv::dilate(edges, edges, kernel, cv::Point(-1, -1), 2);
 
-        std::vector<std::vector<cv::Point>> contours;
+        std::vector<std::vector<cv::Point>> contours; cv::RotatedRect best_coin_rect, best_phone_rect;
+        double max_coin_area = 0, max_phone_area = 0; bool coin_found = false, phone_found = false;
+        std::vector<cv::Point> approx;
         cv::findContours(edges, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-        cv::RotatedRect best_ellipse;
-        double max_area = 0;
-        bool found = false;
-
         for (const auto& contour : contours) {
-            if (contour.size() < 5) continue; // fitEllipse requires >= 5 points
-            
             double area = cv::contourArea(contour);
-            if (area < MIN_AREA) continue;
+            if (area < MIN_COIN_AREA) continue;
 
-            cv::RotatedRect rbox = cv::fitEllipse(contour);
+            double perimeter = cv::arcLength(contour, true);
             
-            // Filter by aspect ratio (eccentricity)
-            // Coin cannot look like a flat line unless at 90 deg (invisible)
-            double minor = std::min(rbox.size.width, rbox.size.height);
-            double major = std::max(rbox.size.width, rbox.size.height);
-            if (minor / major < (1.0 - MAX_ECCENTRICITY)) continue;
+            // DOUGLAS-PEUCKER ALGORITHM
+            // Approximates the contour to a polygon. 
+            // Epsilon = 2% of perimeter is standard for shape counting.
+            cv::approxPolyDP(contour, approx, 0.02 * perimeter, true);
+            
+            size_t vertices = approx.size();
+            bool is_convex = cv::isContourConvex(approx);
 
-            // Pick the largest valid ellipse (assumption: coin is main object)
-            if (area > max_area) {
-                max_area = area;
-                best_ellipse = rbox;
-                found = true;
+            // --- PHONE DETECTION LOGIC ---
+            // 1. Must have exactly 4 corners
+            // 2. Must be convex
+            // 3. Must be large
+            // 4. Corners must be roughly 90 degrees (prevents random trapezoids)
+            if (vertices == 4 && is_convex && area > MIN_PHONE_AREA) {
+                
+                double max_cos = 0;
+                for (size_t j = 0; j < 4; j++) {
+                    double cos_val = std::abs(angle_cosine(approx[j], approx[(j+1)%4], approx[(j+2)%4]));
+                    max_cos = std::max(max_cos, cos_val);
+                }
+
+                // max_cos < 0.3 means all angles are between ~72 and 108 degrees
+                if (max_cos < 0.3) {
+                    // Only update if this is the largest phone found so far (Stability)
+                    if (area > max_phone_area) {
+                        max_phone_area = area;
+                        best_phone_rect = cv::minAreaRect(contour);
+                        phone_found = true;
+                    }
+                }
+            }
+            // --- COIN DETECTION LOGIC ---
+            // 1. Many vertices (> 6) because circles approximate to many lines
+            // 2. High circularity metric
+            else if (vertices > 6) {
+                double circularity = (4 * CV_PI * area) / (perimeter * perimeter);
+                
+                if (circularity > 0.80 && circularity < 1.2) {
+                    if (area > max_coin_area && area < 50000) { // Upper limit to avoid detecting a bowl/plate
+                        max_coin_area = area;
+                        best_coin_rect = cv::fitEllipse(contour);
+                        coin_found = true;
+                    }
+                }
             }
         }
 
-        if (found) {
-            // 2. Visualization & Distance
-            cv::ellipse(frame, best_ellipse, cv::Scalar(0, 0, 255), 2);
-            cv::drawMarker(frame, best_ellipse.center, cv::Scalar(0, 255, 0), cv::MARKER_CROSS, 20, 2);
+        // 3. VISUALIZATION & CALCULATION
+        double px_per_mm = 0.0;
 
-            // Use Major Axis for Distance (less affected by tilt)
-            double major_axis_px = std::max(best_ellipse.size.width, best_ellipse.size.height);
-            double minor_axis_px = std::min(best_ellipse.size.width, best_ellipse.size.height);
+        if (coin_found) {
+            cv::ellipse(frame, best_coin_rect, cv::Scalar(0, 255, 255), 2);
+            cv::Point2f center = best_coin_rect.center;
             
-            double distance_mm = (REAL_DIAMETER_MM * FOCAL_LENGTH_PX) / major_axis_px;
+            // Use the maximum diameter to handle slight perspective tilt
+            double max_diam = std::max(best_coin_rect.size.width, best_coin_rect.size.height);
+            px_per_mm = max_diam / COIN_REAL_DIAMETER_MM;
             
-            // Calculate inclination angle (approximate)
-            // cos(angle) = minor / major
-            double inclination_deg = std::acos(minor_axis_px / major_axis_px) * (180.0 / CV_PI);
-
-            std::string d_txt = std::format("Dist: {:.1f} mm", distance_mm);
-            std::string a_txt = std::format("Tilt: {:.1f} deg", inclination_deg);
-
-            cv::putText(frame, d_txt, best_ellipse.center + cv::Point2f(20, -10), 
-                       cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 0), 2);
-            cv::putText(frame, a_txt, best_ellipse.center + cv::Point2f(20, 20), 
-                       cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 0), 2);
-
-            // 3. Rectification (Warp Plane)
-            // Get 4 corners of the RotatedRect
-            cv::Point2f src_pts[4];
-            best_ellipse.points(src_pts);
-            std::vector<cv::Point2f> src_vec(src_pts, src_pts + 4);
-            src_vec = order_points(src_vec);
-
-            // Define destination square (un-distorted view)
-            // We map the elliptical bounds to a square of size major_axis x major_axis
-            float size = static_cast<float>(major_axis_px);
-            std::vector<cv::Point2f> dst_vec = {
-                {0, 0},
-                {size, 0},
-                {size, size},
-                {0, size}
-            };
-
-            // Calculate Homography and Warp
-            cv::Mat M = cv::getPerspectiveTransform(src_vec, dst_vec);
-            cv::warpPerspective(frame, rectified_view, M, cv::Size((int)size, (int)size));
-            
-            cv::imshow("Rectified Coin", rectified_view);
+            cv::putText(frame, "Ref Coin", center, cv::FONT_HERSHEY_PLAIN, 1.2, cv::Scalar(0,255,255), 2);
         }
 
-        tm.stop();
-        cv::putText(frame, std::format("FPS: {:.1f}", tm.getFPS()), cv::Point(10, 30), 
-                    cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255, 255, 0), 2);
-        tm.reset();
+        if (phone_found) {
+            cv::Point2f pts[4];
+            best_phone_rect.points(pts);
+            
+            for(int i=0; i<4; ++i) {
+                cv::line(frame, pts[i], pts[(i+1)%4], cv::Scalar(0, 255, 0), 3);
+            }
 
-        cv::imshow("Angled Detection", frame);
-        // Show edges for debug if needed
-        // cv::imshow("Edges", edges);
+            if (coin_found && px_per_mm > 0) {
+                // Determine width vs height (independent of rotation)
+                double side_a = std::min(best_phone_rect.size.width, best_phone_rect.size.height);
+                double side_b = std::max(best_phone_rect.size.width, best_phone_rect.size.height);
 
-        if (cv::waitKey(1) == 27) break;
+                double width_mm = side_a / px_per_mm;
+                double height_mm = side_b / px_per_mm;
+
+                std::string txt = std::format("W: {:.1f}mm", width_mm);
+                std::string txt2 = std::format("H: {:.1f}mm", height_mm);
+                
+                cv::Point2f center = best_phone_rect.center;
+                cv::putText(frame, txt, center - cv::Point2f(0, 10), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 0), 2);
+                cv::putText(frame, txt2, center + cv::Point2f(0, 25), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 0), 2);
+            }
+        }
+
+        // Debug View (Picture-in-Picture)
+        cv::Mat debug_small;
+        cv::resize(edges, debug_small, cv::Size(), 0.25, 0.25);
+        cv::cvtColor(debug_small, debug_small, cv::COLOR_GRAY2BGR);
+        debug_small.copyTo(frame(cv::Rect(0, 0, debug_small.cols, debug_small.rows)));
+        cv::putText(frame, "Canny Edge", cv::Point(5, 15), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0,0,255), 1);
+
+        cv::imshow("Metrology Fixed", frame);
+        if (cv::waitKey(1) == 27) break; // ESC
     }
 
     cap.release();

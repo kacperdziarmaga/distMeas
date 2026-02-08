@@ -17,7 +17,7 @@ endif()
 find_package(dlib QUIET)
 if(NOT dlib_FOUND)
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(DLIB REQUIRED dlib-1)
+    pkg_check_modules(DLIB REQUIRED IMPORTED_TARGET dlib-1) 
 endif()
 
 set(SOURCES main.cpp)
@@ -34,14 +34,13 @@ endif()
 if(dlib_FOUND)
     target_link_libraries(${PROJECT_NAME} PRIVATE dlib::dlib)
 else()
-    target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE ${DLIB_INCLUDE_DIRS})
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${DLIB_LIBRARIES})
+    target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::DLIB)
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${OpenCV_LIBS}
-    ${BLAS_LIBRARIES}
-    ${LAPACK_LIBRARIES}
+    BLAS::BLAS
+    LAPACK::LAPACK
 )
 
 if(APPLE)
