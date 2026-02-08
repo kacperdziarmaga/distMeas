@@ -30,8 +30,8 @@ int main() {
         if (!cap.read(frame)) break;
 
         cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-        cv::GaussianBlur(gray, blurred, cv::Size(0, 0), 4);
-        cv::Canny(blurred, edges, 0.1, 70, 3, true);
+        cv::GaussianBlur(gray, blurred, cv::Size(0, 0), 2);
+        cv::Canny(blurred, edges, 30, 100, 3, true);
         cv::dilate(edges, edges, kernel, cv::Point(-1, -1));
 
         std::vector<std::vector<cv::Point>> contours; cv::RotatedRect best_coin_rect, best_phone_rect;
@@ -133,10 +133,16 @@ int main() {
             cv::ellipse(frame, best_coin_rect, cv::Scalar(0, 255, 255), 2);
             cv::Point2f center = best_coin_rect.center;
             
-            double max_diam = std::max(best_coin_rect.size.width, best_coin_rect.size.height);
-            px_per_mm = max_diam / COIN_REAL_DIAMETER_MM;
+            double major = std::max(best_coin_rect.size.width, best_coin_rect.size.height);
+            double minor = std::min(best_coin_rect.size.width, best_coin_rect.size.height);
             
-            cv::putText(frame, "Ref Coin", center, cv::FONT_HERSHEY_PLAIN, 1.2, cv::Scalar(0,255,255), 2);
+            double tilt_deg = std::acos(std::clamp(minor / major, 0.0, 1.0)) * (180.0 / CV_PI);
+            
+            double dist_mm = (COIN_REAL_DIAMETER_MM * FOCAL_LENGTH_PX) / major;
+            px_per_mm = major / COIN_REAL_DIAMETER_MM;
+            
+            cv::putText(frame, std::format("Tilt: {:.1f} deg", tilt_deg), center + cv::Point2f(0, 45), cv::FONT_HERSHEY_PLAIN, 1.2, cv::Scalar(0,255,255), 2);
+            cv::putText(frame, std::format("Dist: {:.1f}mm", dist_mm), center + cv::Point2f(0, 25), cv::FONT_HERSHEY_PLAIN, 1.2, cv::Scalar(0,255,255), 2);
         }
 
         if (phone_found) {
