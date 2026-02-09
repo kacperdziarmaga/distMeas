@@ -21,19 +21,11 @@ public:
      * 
      * Applies the following filters:
      * 1. Area > MIN_PHONE_AREA
-     * 2. Polygon approximation == 4 vertices
-     * 3. Convexity check
-     * 4. Rectangularity check (max cosine deviation)
+     * 2. Rectangularity check (contour area vs bounding box area)
+     *    Supports rounded edges by checking fill ratio (> 0.9) rather than vertex count.
      * 
      * @param contours The vector of contours from the image pipeline.
      * @return PhoneResult containing the best candidate (if any).
      */
     PhoneResult DetectBestPhone(const std::vector<std::vector<cv::Point>>& contours) const;
-
-private:
-    /**
-     * @brief Helper to calculate the maximum cosine of angles in a quadrilateral.
-     * Used to verify that corners are roughly 90 degrees.
-     */
-    double GetMaxCosineDeviation(const std::vector<cv::Point>& approx) const;
 };
