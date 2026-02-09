@@ -7,8 +7,8 @@ ImagePipeline::ImagePipeline() {
 
 cv::Mat ImagePipeline::ProcessFrame(const cv::Mat& frame) {
     cv::cvtColor(frame, _gray, cv::COLOR_BGR2GRAY);
-    cv::GaussianBlur(_gray, _blurred, cv::Size(0, 0), 2);
-    cv::Canny(_blurred, _edges, 30, 100, 3, true);
+    cv::GaussianBlur(_gray, _blurred, cv::Size(0, 0), 4.0);
+    cv::Canny(_blurred, _edges, 10, 50, 3, true);
     cv::dilate(_edges, _edges, _kernel, cv::Point(-1, -1));
     return _edges;
 }
